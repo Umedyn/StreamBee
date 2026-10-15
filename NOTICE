@@ -1,0 +1,36 @@
+StreamBee
+Copyright 2026 Umedyn
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+That license covers StreamBee's own source code, overlay and generated sound effects.
+
+-------------------------------------------------------------------------------
+Third-party components
+-------------------------------------------------------------------------------
+
+The following are used by StreamBee but are NOT covered by StreamBee's license.
+Each remains under its own license.
+
+Piper TTS (piper-tts)
+  https://github.com/OHF-Voice/piper1-gpl
+  License: GPL-3.0-or-later
+  Used as a separate Python package for speech synthesis.
+
+Piper voice: en_GB-semaine-medium
+  https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_GB/semaine/medium
+  Trained on the SEMAINE dataset (https://github.com/marytts/dfki-semaine-data)
+  License: CC BY-NC-SA 4.0 (non-commercial) - http://creativecommons.org/licenses/by-nc-sa/4.0/
+  Not bundled; downloaded separately by the user.
+
+BeeLLM
+  https://huggingface.co/schizophyllume
+  License: Apache 2.0
+  Not bundled; downloaded separately by the user.
+
+llama.cpp (llama-server)
+  https://github.com/ggml-org/llama.cpp
+  License: MIT
+  Not bundled; downloaded separately by the user.
+
+Python packages: numpy (BSD-3-Clause), sounddevice (MIT), soundfile (BSD-3-Clause),
+websocket-client (Apache 2.0).

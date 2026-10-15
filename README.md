@@ -2,7 +2,7 @@
 
 A little bee that lives on your stream. It buzzes around an OBS browser source, reacts
 to chat commands, channel point redeems, subs and raids, and narrates what it's doing
-in a low Piper voice, with speech bubbles on screen. Its brain is
+in a small, slightly high-pitched Piper voice, with speech bubbles on screen. Its brain is
 [BeeLLM](https://huggingface.co/schizophyllume), a tiny model that only speaks bee and
 has moods of its own. Everything runs locally.
 
@@ -11,8 +11,12 @@ has moods of its own. Everything runs locally.
 ## Quick start (Windows)
 
 1. **Unzip** the whole folder anywhere.
-2. **Add a voice.** Drop one Piper voice (`.onnx` **and** its `.onnx.json`) into `voices\`.
-   A deeper voice suits the bee. Voices: <https://huggingface.co/rhasspy/piper-voices/tree/main>
+2. **Add the bee's voice.** StreamBee is set up for **`en_GB-semaine-medium`**. At its normal
+   speed and pitch it's a little high-pitched, which suits a bee. Download both files from
+   <https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_GB/semaine/medium>:
+   `en_GB-semaine-medium.onnx` **and** `en_GB-semaine-medium.onnx.json`, and put them in `voices\`.
+   To use a different voice, set `file` under `[voice]` in `config.toml` (or `""` to use
+   whichever voice is in the folder).
 3. **Add the brain** (optional, but it's what gives the bee moods and reactions):
    - Put `BeeLLM-2.0-12M-Mood.gguf` in `models\`.
    - From <https://github.com/ggml-org/llama.cpp/releases>, download the Windows **CPU** zip
@@ -79,7 +83,7 @@ Raids bring a swarm, and subs make it dance. Redeems are off by default (see bel
 
 | Section                | What it controls                                                        |
 |------------------------|-------------------------------------------------------------------------|
-| `[voice]`              | Piper voice file, speed (`length_scale`), pitch (`pitch_semitones`)     |
+| `[voice]`              | Piper voice file (default `en_GB-semaine-medium.onnx`), speed (`length_scale`, 1.0 = normal), pitch (`pitch_semitones`, 0 = normal) |
 | `[speech]`             | max reply length, whether actions are spoken/shown, mood duration       |
 | `[model]`              | which `.gguf`, llama-server location, or `server_url` for your own server |
 | `[overlay]`            | port, bee size, speed, bubbles on/off, custom sprite                    |
