@@ -11,13 +11,13 @@ has moods of its own. Everything runs locally.
 ## Quick start (Windows)
 
 1. **Unzip** the whole folder anywhere.
-2. **Add the bee's voice.** StreamBee is set up for **`en_GB-semaine-medium`**. At its normal
+2. **Add the bee's voice. Already Included** StreamBee is set up for **`en_GB-semaine-medium`**. At its normal
    speed and pitch it's a little high-pitched, which suits a bee. Download both files from
    <https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_GB/semaine/medium>:
    `en_GB-semaine-medium.onnx` **and** `en_GB-semaine-medium.onnx.json`, and put them in `voices\`.
    To use a different voice, set `file` under `[voice]` in `config.toml` (or `""` to use
    whichever voice is in the folder).
-3. **Add the brain** (optional, but it's what gives the bee moods and reactions):
+3. **Add the brain. Already Included** (optional, but it's what gives the bee moods and reactions):
    - Put `BeeLLM-2.0-12M-Mood.gguf` in `models\`.
    - From <https://github.com/ggml-org/llama.cpp/releases>, download the Windows **CPU** zip
      (`llama-bXXXX-bin-win-cpu-x64.zip`) and copy `llama-server.exe` **and every `.dll` next
