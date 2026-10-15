@@ -1,0 +1,427 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>StreamBee</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+
+// OBS's browser source can run an older Chromium than desktop Chrome; roundRect needs Chromium 99+.
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+  };
+}
+
+// Opened as a local file (OBS "Local file" checkbox / double-click)? Then talk to the server by
+// absolute address. Override the port with ?port=1234 if you changed it in config.toml.
+const BASE = location.protocol.startsWith('http') ? ''
+  : 'http://127.0.0.1:' + (new URLSearchParams(location.search).get('port') || '8765');
+
+// Add ?debug to the browser source URL to see events and errors on screen.
+const DEBUG = /[?&]debug\b/.test(location.search);
+const dbg = { events: [], error: '', count: 0 };
+function note(msg) { dbg.events.push(msg); if (dbg.events.length > 6) dbg.events.shift(); }
+window.addEventListener('error', e => { dbg.error = e.message; });
+let W = 0, H = 0;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cvs.width = W * dpr; cvs.height = H * dpr;
+  cvs.style.width = W + 'px'; cvs.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+const CFG = { size: 64, speed: 1, image: '', bubbles: true,
+              flowerSeconds: 30, pollinateSeconds: 5, maxFlowers: 4 };
+let IMG = null;
+const M = 50; // keep-in margin
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const now = () => performance.now() / 1000;
+
+// ---------------- bees ----------------
+class Bee {
+  constructor(x, y, scale = 1, leader = null) {
+    Object.assign(this, { x, y, scale, leader, vx: 0, vy: 0, face: 1,
+      tx: x, ty: y, energy: 0.5, wander: 0.5, mode: 'fly', until: 0,
+      retarget: 0, phase: Math.random() * 6.28, ax: x, ay: y,
+      off: { x: rand(-160, 160), y: rand(-110, 110) }, dead: false, leaving: 0,
+      mood: '', moodLevel: 1, moodUntil: 0 });
+  }
+  set(mode, seconds = 0) {
+    this.mode = mode;
+    this.until = seconds ? now() + seconds : 0;
+    this.retarget = 0;
+  }
+  pickTarget() {
+    const r = 150 + this.wander * 600;
+    this.tx = clamp(this.x + rand(-r, r), M, W - M);
+    this.ty = clamp(this.y + rand(-r, r), M, H - M);
+    this.retarget = now() + rand(0.4, 1) * (2.6 - this.wander * 1.8);
+  }
+  update(dt, t) {
+    if (this.until && t > this.until) this.endTimed();
+    const L = this.leader;
+    if (L) {                        // swarm follower
+      if (this.leaving) { this.tx = this.leaving * (W + 200) - 100; this.ty = this.y; }
+      else {
+        this.tx = L.x + this.off.x + Math.sin(t * 2 + this.phase) * 40;
+        this.ty = L.y + this.off.y + Math.cos(t * 3 + this.phase) * 30;
+      }
+      this.energy = 0.8; this.wander = 0.7;
+      if (this.leaving && (this.x < -80 || this.x > W + 80)) this.dead = true;
+    } else switch (this.mode) {
+      case 'fly':
+        if (t > this.retarget || Math.hypot(this.tx - this.x, this.ty - this.y) < 20) this.pickTarget();
+        break;
+      case 'hover':
+        this.tx = this.ax + Math.sin(t * 0.9 + this.phase) * 30;
+        this.ty = this.ay + Math.sin(t * 1.7) * 15;
+        break;
+      case 'buzz':                  // excited loops around the anchor
+        this.tx = this.ax + Math.cos(t * 6) * 90;
+        this.ty = this.ay + Math.sin(t * 9) * 50;
+        this.energy = 1;
+        break;
+      case 'dance':                 // figure eight
+        this.tx = this.ax + Math.sin(t * 3) * 120;
+        this.ty = this.ay + Math.sin(t * 6) * 45;
+        this.energy = 0.9;
+        break;
+      case 'land':
+        if (Math.hypot(this.tx - this.x, this.ty - this.y) < 6) { this.mode = 'perched'; this.vx = this.vy = 0; }
+        break;
+      case 'perched': this.vx = this.vy = 0; return;
+      case 'flower': {
+        const f = this.flower;
+        if (!f || f.dead) { this.anchor(); this.set('hover'); break; }
+        this.tx = f.x + 12; this.ty = f.y - 30;
+        if (Math.hypot(this.tx - this.x, this.ty - this.y) < 10) { this.set('pollinate', CFG.pollinateSeconds); f.visited = true; }
+        break;
+      }
+      case 'pollinate': {
+        const f = this.flower;
+        this.tx = f.x + Math.cos(t * 4) * 18; this.ty = f.y - 26 + Math.sin(t * 8) * 5;
+        this.energy = 0.3;
+        if (Math.random() < 0.35) pollen.push({ x: this.x, y: this.y + 8, vx: rand(-20, 20), vy: rand(-30, 10), life: 1.2 });
+        break;
+      }
+      case 'dive': this.energy = 1; this.wander = 0.1; break;
+      case 'away': break;           // target already offscreen
+    }
+    if (this.mood && t > this.moodUntil) this.mood = '';
+    const mf = MOOD_FX[this.mood] || MOOD_FX[''];
+    const max = (120 + 380 * this.energy) * CFG.speed * (L ? 1.15 : mf.speed);
+    let dx = this.tx - this.x, dy = this.ty - this.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const sp = Math.min(max, d * 3);
+    const k = Math.min(1, dt * 3);
+    this.vx += (dx / d * sp - this.vx) * k;
+    this.vy += (dy / d * sp - this.vy) * k;
+    const jit = this.wander * this.energy * 600 * dt * (L ? 1 : mf.jitter);
+    if (!L && mf.glyph && Math.random() < dt * 1.2 * this.moodLevel)
+      fx.push({ x: this.x + rand(-10, 10), y: this.y - CFG.size * 0.5, vy: -28, life: 1.6, ...mf.glyph });
+    this.vx += rand(-jit, jit); this.vy += rand(-jit, jit);
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    if (Math.abs(this.vx) > 15) this.face = this.vx > 0 ? 1 : -1;
+  }
+  anchor() { this.ax = clamp(this.x, M, W - M); this.ay = clamp(this.y, M, H - M); }
+  endTimed() {
+    this.until = 0;
+    if (this.mode === 'away') {     // come back in from a random side
+      const left = Math.random() < 0.5;
+      this.x = left ? -60 : W + 60; this.y = rand(H * 0.2, H * 0.7);
+      this.set('fly');
+    } else {
+      if (this.mode === 'pollinate' && this.flower) this.flower.fadeAt = now() + CFG.flowerSeconds;
+      this.anchor();
+      if (this.mode === 'dive') this.ay = clamp(this.ay - 180, M, H - M);
+      this.set('hover');
+    }
+  }
+  draw(t) {
+    const s = (CFG.size / 64) * this.scale;
+    const flying = this.mode !== 'perched';
+    const bob = flying ? Math.sin(t * 6 + this.phase) * 4 : 0;
+    ctx.save();
+    const mf = MOOD_FX[this.mood] || MOOD_FX[''];
+    const shake = mf.shake ? rand(-mf.shake, mf.shake) : 0;
+    ctx.translate(this.x + shake, this.y + bob);
+    ctx.scale(this.face * s, s);
+    ctx.rotate(clamp(this.vy / 900, -0.35, 0.35) * this.face);
+    if (IMG) {
+      ctx.drawImage(IMG, -32, -32, 64, 64);
+    } else {
+      // stinger
+      ctx.fillStyle = '#2a1f00';
+      ctx.beginPath(); ctx.moveTo(-21, -3); ctx.lineTo(-30, 0); ctx.lineTo(-21, 3); ctx.fill();
+      // body
+      ctx.beginPath(); ctx.ellipse(0, 0, 22, 15, 0, 0, Math.PI * 2);
+      ctx.fillStyle = mf.body || '#f6c12b'; ctx.fill();
+      ctx.save(); ctx.clip();
+      ctx.fillStyle = '#2b2116';
+      ctx.fillRect(-12, -16, 6, 32); ctx.fillRect(0, -16, 6, 32);
+      ctx.restore();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#3a2a00'; ctx.stroke();
+      // head
+      ctx.beginPath(); ctx.arc(21, -2, 10, 0, Math.PI * 2); ctx.fillStyle = '#2b2116'; ctx.fill();
+      ctx.beginPath(); ctx.arc(25, -5, 3.4, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.beginPath(); ctx.arc(26, -5, 1.6, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+      // antennae
+      ctx.strokeStyle = '#2b2116'; ctx.lineWidth = 1.6;
+      for (const o of [0, 5]) {
+        const ty = mf.droop ? -2 : -22, cy = mf.droop ? -20 : -22;
+        ctx.beginPath(); ctx.moveTo(20 + o, -10); ctx.quadraticCurveTo(24 + o, cy, 31 + o, ty); ctx.stroke();
+        ctx.beginPath(); ctx.arc(31 + o, ty, 1.8, 0, Math.PI * 2); ctx.fillStyle = '#2b2116'; ctx.fill();
+      }
+      if (mf.brow) {               // angry brow
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(21, -10); ctx.lineTo(29, -7); ctx.stroke();
+      }
+      // wings
+      const flap = flying ? 0.35 + 0.65 * Math.abs(Math.sin(t * 38 + this.phase)) : 0.4;
+      ctx.fillStyle = 'rgba(235,248,255,0.7)'; ctx.strokeStyle = 'rgba(120,150,170,0.8)'; ctx.lineWidth = 1;
+      for (const [wx, rot] of [[-4, -0.5], [4, -0.2]]) {
+        ctx.save(); ctx.translate(wx, -13); ctx.rotate(rot); ctx.scale(1, flap);
+        ctx.beginPath(); ctx.ellipse(0, -9, 8, 13, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+}
+
+// mood -> look. Unknown moods just behave normally (their flight still changes via config).
+const MOOD_FX = {
+  '':      { speed: 1,    jitter: 1 },
+  happy:   { speed: 1.1,  jitter: 1,   glyph: { ch: '\u2665', color: '#ff6fa3' } },
+  sad:     { speed: 0.7,  jitter: 0.6, droop: true },
+  sleepy:  { speed: 0.55, jitter: 0.4, droop: true, glyph: { ch: 'z', color: '#cfe3ff' } },
+  mad:     { speed: 1.25, jitter: 1.6, body: '#f08a2c', brow: true, shake: 1.5 },
+  angry:   { speed: 1.25, jitter: 1.6, body: '#f08a2c', brow: true, shake: 1.5 },
+  scared:  { speed: 1.3,  jitter: 1.8, shake: 2.5, glyph: { ch: '!', color: '#ffffff' } },
+};
+const fx = [];
+const bee = new Bee(-60, H * 0.4);
+let followers = [];
+const flowers = [];
+const pollen = [];
+let bubble = null;
+
+function drawFlower(f, t) {
+  ctx.save();
+  ctx.globalAlpha = f.alpha;
+  ctx.translate(f.x, f.y);
+  const grow = Math.min(1, (t - f.born) * 3);
+  ctx.scale(grow, grow);
+  ctx.strokeStyle = '#3f8f3a'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(-6, 30, 0, 60); ctx.stroke();
+  ctx.fillStyle = f.color;
+  for (let i = 0; i < 5; i++) {
+    const a = i / 5 * Math.PI * 2 + t * 0.3;
+    ctx.beginPath(); ctx.ellipse(Math.cos(a) * 13, Math.sin(a) * 13, 10, 7, a, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.fillStyle = '#f2b705'; ctx.fill();
+  ctx.restore();
+}
+
+// Bubble text: plain buzzing, with *actions* shown in italic amber. Word-wrapped.
+const FONT_BUZZ = '600 16px system-ui, sans-serif';
+const FONT_ACT = 'italic 600 16px system-ui, sans-serif';
+const LINE_H = 21, MAX_W = 300;
+
+function makeBubble(text) {
+  const toks = [], re = /\*([^*]+)\*|([^*]+)/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const act = m[1] !== undefined;
+    const words = (act ? m[1] : m[2]).split(/\s+/).filter(Boolean);
+    if (act && words.length) {                 // keep *...* so back-to-back actions stay separate
+      words[0] = '*' + words[0];
+      words[words.length - 1] += '*';
+    }
+    for (const w of words) toks.push({ s: w, act });
+  }
+  ctx.save();
+  ctx.font = FONT_BUZZ; const space = ctx.measureText(' ').width;
+  const lines = []; let line = [], lw = 0;
+  for (const tk of toks) {
+    ctx.font = tk.act ? FONT_ACT : FONT_BUZZ;
+    tk.w = ctx.measureText(tk.s).width;
+    const gap = line.length ? space : 0;
+    if (line.length && lw + gap + tk.w > MAX_W) { lines.push({ items: line, w: lw }); line = []; lw = 0; }
+    line.push(tk); lw += (line.length > 1 ? space : 0) + tk.w;
+  }
+  if (line.length) lines.push({ items: line, w: lw });
+  ctx.restore();
+  const life = clamp(2.5 + text.length * 0.05, 3, 8);
+  return { lines, space, born: now(), life,
+           w: Math.max(...lines.map(l => l.w), 20) + 22, h: lines.length * LINE_H + 12 };
+}
+
+function drawBubble(t) {
+  if (!bubble || !CFG.bubbles || !bubble.lines.length) return;
+  const age = t - bubble.born;
+  if (age > bubble.life) { bubble = null; return; }
+  const { w, h } = bubble;
+  ctx.save();
+  ctx.globalAlpha = age > bubble.life - 0.6 ? (bubble.life - age) / 0.6 : 1;
+  const x = clamp(bee.x - w / 2, 8, W - w - 8);
+  const above = bee.y - CFG.size * 0.9 - h;      // flip below the bee near the top edge
+  const y = clamp(above >= 8 ? above : bee.y + CFG.size * 0.7, 8, H - h - 8);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.strokeStyle = '#3a2a00'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 12); ctx.fill(); ctx.stroke();
+  ctx.textBaseline = 'middle';
+  bubble.lines.forEach((ln, i) => {
+    let cx = x + (w - ln.w) / 2;
+    const cy = y + 6 + i * LINE_H + LINE_H / 2 + 1;
+    for (const tk of ln.items) {
+      ctx.font = tk.act ? FONT_ACT : FONT_BUZZ;
+      ctx.fillStyle = tk.act ? '#9a5b00' : '#2b2116';
+      ctx.fillText(tk.s, cx, cy);
+      cx += tk.w + bubble.space;
+    }
+  });
+  ctx.restore();
+}
+
+// ---------------- events from StreamBee ----------------
+function handle(ev) {
+  dbg.count++;
+  if (DEBUG) note(ev.type + (ev.text ? ': ' + ev.text.slice(0, 50) : ''));
+  if (ev.energy !== undefined) bee.energy = ev.energy;
+  if (ev.wander !== undefined) bee.wander = ev.wander;
+  // idle wandering (no user) doesn't drag the bee away from a flower it's visiting
+  if ((ev.type === 'fly' || ev.type === 'land') && !ev.user &&
+      (bee.mode === 'flower' || bee.mode === 'pollinate')) return;
+  switch (ev.type) {
+    case 'fly':   bee.set('fly', ev.duration || 4); break;
+    case 'buzz':  bee.anchor(); bee.set('buzz', Math.min(ev.duration || 3, 5)); break;
+    case 'dance': bee.anchor(); bee.set('dance', ev.seconds || 6); break;
+    case 'land':
+      bee.tx = rand(M * 2, W - M * 2); bee.ty = H - M - rand(0, 40);
+      bee.energy = 0.35; bee.set('land'); break;
+    case 'flower': {
+      // appear near the bee (it's being held out to it), kept fully on screen incl. the stem
+      const ang = rand(0, Math.PI * 2), dist = rand(140, 240);
+      const f = { x: clamp(bee.x + Math.cos(ang) * dist, 60, W - 60),
+                  y: clamp(bee.y + Math.sin(ang) * dist, 60, H - 90), born: now(), alpha: 1,
+        color: ['#ff7aa8', '#b18cff', '#ff9f43', '#ffffff', '#6fc3ff'][Math.floor(rand(0, 5))] };
+      f.expire = now() + CFG.flowerSeconds + 20;          // never left stuck if the bee is pulled away
+      const alive = flowers.filter(o => !o.fade);
+      if (alive.length >= CFG.maxFlowers) alive[0].fade = true;   // oldest one wilts
+      flowers.push(f); bee.flower = f; bee.set('flower'); break;
+    }
+    case 'shoo':
+      bee.tx = bee.x < W / 2 ? -120 : W + 120; bee.ty = bee.y;
+      bee.energy = 1; bee.wander = 0.2; bee.set('away', ev.seconds || 20); break;
+    case 'swarm': {
+      const n = clamp(ev.count || 6, 1, 30);
+      for (let i = 0; i < n; i++) {
+        const left = Math.random() < 0.5;
+        const f = new Bee(left ? -60 : W + 60, rand(H * 0.1, H * 0.9), rand(0.45, 0.75), bee);
+        f.leaveAt = now() + (ev.seconds || 15) + rand(0, 2);
+        followers.push(f);
+      }
+      if (bee.mode === 'perched' || bee.mode === 'away') { bee.x = clamp(bee.x, 0, W); bee.set('fly'); }
+      break;
+    }
+    case 'say': bubble = ev.text ? makeBubble(ev.text) : null; break;
+    case 'dive':
+      bee.tx = clamp(bee.x + bee.face * 260, M, W - M); bee.ty = H - M;
+      bee.set('dive', 1.3); break;
+    case 'mood':
+      bee.mood = (ev.mood || '').toLowerCase();
+      if (bee.mood === 'neutral') bee.mood = ''; bee.moodLevel = ev.level || 1;
+      bee.moodUntil = now() + (ev.seconds || 90); break;
+  }
+}
+
+// ---------------- loop ----------------
+let last = now();
+function frame() {
+  requestAnimationFrame(frame);              // schedule first so one error can't freeze the bee
+  try { step(); } catch (err) { dbg.error = String(err); console.error(err); }
+  if (DEBUG) drawDebug();
+}
+
+function drawDebug() {
+  ctx.save();
+  ctx.font = '13px monospace'; ctx.textBaseline = 'top';
+  const lines = ['StreamBee debug | ' + navigator.userAgent.match(/Chrome\/[\d.]+/),
+                 'page: ' + location.href.slice(0, 60),
+                 'events: ' + (BASE || location.origin) + '/events | received: ' + dbg.count,
+                 'canvas: ' + W + 'x' + H + ' | bee: ' + Math.round(bee.x) + ',' + Math.round(bee.y) + ' (' + bee.mode + ')',
+                 'flowers: ' + flowers.map(f => Math.round(f.x) + ',' + Math.round(f.y) + ' a=' + f.alpha.toFixed(2)).join('  ') ,
+                 'bubbles: ' + CFG.bubbles + ' | bubble now: ' + (bubble ? 'yes' : 'no')]
+    .concat(dbg.events.map(e => '> ' + e));
+  if (dbg.error) lines.push('ERROR: ' + dbg.error);
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(8, 8, 520, lines.length * 17 + 10);
+  lines.forEach((l, i) => { ctx.fillStyle = l.startsWith('ERROR') ? '#ff8080' : '#e8e8e8'; ctx.fillText(l, 14, 13 + i * 17); });
+  ctx.restore();
+}
+
+function step() {
+  const t = now(), dt = Math.min(0.05, t - last); last = t;
+  ctx.clearRect(0, 0, W, H);
+
+  for (const f of flowers) {
+    if (!f.fade && ((f.fadeAt && t > f.fadeAt) || t > f.expire)) f.fade = true;
+    if (f.fade) f.alpha -= dt * 0.5;
+    if (f.alpha <= 0) f.dead = true;
+  }
+  for (let i = flowers.length - 1; i >= 0; i--) if (flowers[i].dead) flowers.splice(i, 1);
+  for (const f of flowers) drawFlower(f, t);
+
+  for (const p of pollen) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 40 * dt; p.life -= dt; }
+  for (let i = pollen.length - 1; i >= 0; i--) if (pollen[i].life <= 0) pollen.splice(i, 1);
+  ctx.fillStyle = '#ffd34d';
+  for (const p of pollen) { ctx.globalAlpha = clamp(p.life, 0, 1); ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, 6.28); ctx.fill(); }
+  ctx.globalAlpha = 1;
+
+  for (const f of followers) {
+    if (!f.leaving && t > f.leaveAt) f.leaving = Math.random() < 0.5 ? 0.0001 : 1;
+    f.update(dt, t); f.draw(t);
+  }
+  followers = followers.filter(f => !f.dead);
+
+  bee.update(dt, t); bee.draw(t);
+  ctx.font = '700 18px system-ui, sans-serif'; ctx.textAlign = 'center';
+  for (const f of fx) { f.y += f.vy * dt; f.life -= dt; ctx.globalAlpha = clamp(f.life, 0, 1); ctx.fillStyle = f.color; ctx.fillText(f.ch, f.x, f.y); }
+  ctx.globalAlpha = 1; ctx.textAlign = 'start';
+  for (let i = fx.length - 1; i >= 0; i--) if (fx[i].life <= 0) fx.splice(i, 1);
+  drawBubble(t);
+}
+
+function connect() {
+  const es = new EventSource(BASE + '/events');   // auto-reconnects if StreamBee restarts
+  es.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (err) { dbg.error = String(err); console.error(err); } };
+  es.onopen = () => { if (DEBUG) note('event stream connected'); };
+  es.onerror = () => { if (DEBUG) note('event stream lost, retrying...'); };
+}
+
+fetch(BASE + '/config.json').then(r => r.json()).then(c => Object.assign(CFG, c)).catch(() => {})
+  .finally(() => {
+    if (CFG.image) { IMG = new Image(); IMG.src = CFG.image; IMG.onerror = () => { IMG = null; }; }
+    bee.set('fly');
+    connect();
+    requestAnimationFrame(frame);
+  });
+</script>
+</body>
+</html>

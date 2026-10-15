@@ -1,0 +1,202 @@
+# ===================== StreamBee =====================
+# Add the overlay in OBS: Sources -> + -> Browser
+#   URL:    http://127.0.0.1:8765/
+#   Width:  1920   Height: 1080   (match your canvas)
+
+[twitch]
+channel = "your_channel_name"   # no leading '#'
+
+[audio]
+output_device = -1              # -1 = system default. run.bat --list-devices for indexes
+
+[voice]
+folder = "voices"
+file = "en_GB-semaine-medium.onnx"                       # .onnx in voices/; "" = first found
+length_scale = 0.0              # >1 slower
+pitch_semitones = 0.0          # negative = deeper (naive resample, also slows it a bit)
+
+[sfx]
+folder = "sfx"
+
+[queue]
+max = 5                         # keep it small so the bee never lags behind chat
+
+[speech]
+max_chars = 90                  # longest reply the bee will say/show
+speak_actions = true            # Piper narrates *actions* ("stings you.") along with the buzzing
+show_actions = true             # actions appear in the bubble in italics
+mood_seconds = 90               # how long a mood shows on the overlay before fading
+
+[model]
+mode = "auto"                   # auto = run bundled llama-server if present, else procedural
+                                # server = use server_url only | off = always procedural
+binary = ""                     # "" = auto: bin/llama-server(.exe), then llama-server on PATH
+model = "models/BeeLLM-2.0-12M-Mood.gguf"
+port = 8081
+ctx = 1024
+server_url = ""                 # point at your own llama-server or KoboldCpp, e.g. "http://127.0.0.1:5001"
+api = "chat"                    # chat = /v1/chat/completions (uses the model's chat template)
+                                # completion = /completion with prompt_template below
+prompt_template = "User: {input}\nBee:"
+system = ""                     # optional system prompt; leave empty unless the model needs one
+history_turns = 2               # recent viewer exchanges the bee remembers. Higher = moods stick
+                                # longer (and grudges too). Idle chatter is never remembered.
+max_tokens = 40
+temperature = 0.9
+
+[overlay]
+port = 8765
+bee_size = 64                   # pixels
+speed = 1.0                     # flight speed multiplier
+bubbles = true                  # show a little speech bubble when the bee talks
+flower_seconds = 30             # how long a !flower stays after the bee visits it
+pollinate_seconds = 5           # how long the bee hangs around the flower
+max_flowers = 4                 # more !flowers than this and the oldest wilts
+image = ""                      # optional custom sprite in overlay/, e.g. "mybee.png"
+
+[idle]
+min_seconds = 8
+max_seconds = 25
+speak_chance = 0.15             # chance per idle tick to say something
+sound_chance = 0.5              # chance per idle tick to just play a buzz sfx
+speak_template = '{sfx "buzz_short.wav"} {buzz}'
+sfx_template = '{sfx "buzz_short.wav"}'
+prompts = ["*buzzes around*", "*looks around*", "*sees a flower*", "*hears chat*", "..."]
+
+# ---------- Moods ----------
+# BeeLLM-2.0-Mood tags its replies like [sad:high]. Each mood pulls the flight
+# toward these values (scaled by low/high). Unknown moods are still shown on the overlay.
+# A bare mood word in the reply ("...sad...") counts as a weak version of that mood.
+[moods.happy]
+energy = 0.8
+wander = 0.6
+
+[moods.sad]
+energy = 0.25
+wander = 0.2
+land_chance = 0.5
+
+[moods.angry]
+energy = 1.0
+wander = 0.9
+
+[moods.mad]
+energy = 1.0
+wander = 0.9
+
+[moods.neutral]
+energy = 0.5
+wander = 0.5
+
+[moods.scared]
+energy = 0.9
+wander = 1.0
+
+[moods.sleepy]
+energy = 0.15
+wander = 0.1
+land_chance = 0.7
+
+# ---------- Emotes ----------
+# With action = "auto", the bee's own words pick the move. First rule whose word
+# appears anywhere in the reply wins (*droops antennae*, "hides", "ATTACKS"...).
+# action: fly | land | buzz | dive | dance | shoo
+[[emotes.rule]]
+match = ["attack", "dive bomb", "dive-bomb", "charge", "sting", "headbutt", "bite"]
+action = "dive"
+
+[[emotes.rule]]
+match = ["hide", "hides"]
+action = "shoo"
+seconds = 6
+
+[[emotes.rule]]
+match = ["droop", "sigh", "sit", "rest", "sleep"]
+action = "land"
+
+[[emotes.rule]]
+match = ["dance", "spin", "wiggle", "twirl"]
+action = "dance"
+seconds = 4
+
+[[emotes.rule]]
+match = ["zoom", "fly", "flies", "loop"]
+action = "buzz"
+
+[filters]
+ignore_users = ["nightbot", "streamelements", "moobot", "streamlabs"]
+max_chars = 300
+
+# ---------- Chat commands ----------
+# prompt:   what the viewer "does" to the bee; {user} {message} (message = text after the command)
+# action:   auto (bee's reply decides) | buzz | fly | land | flower | shoo | swarm | dance | dive
+# template: what gets spoken: {user} {buzz} {sfx "file.wav"}   (TOML single quotes keep the inner "")
+[commands]
+prefix = "!"
+cooldown = 10                   # default per-command cooldown (seconds)
+
+[[commands.action]]
+name = "bee"                    # !bee are you ok?
+prompt = "{message}"
+empty_prompt = "*waves at the bee*"
+action = "auto"
+template = '{buzz}'
+
+[[commands.action]]
+name = "flower"
+prompt = "*holds out a flower*"
+action = "flower"
+template = '{sfx "pop.wav"} {buzz}'
+
+[[commands.action]]
+name = "pat"
+prompt = "*pats head softly*"
+action = "auto"
+template = '{buzz}'
+
+[[commands.action]]
+name = "shoo"
+prompt = "*waves arms to shoo the bee away*"
+action = "shoo"
+seconds = 20
+cooldown = 60
+template = '{sfx "buzz_away.wav"}'
+
+[[commands.action]]
+name = "dance"
+prompt = "*plays music*"
+action = "dance"
+seconds = 6
+template = '{buzz}'
+
+# ---------- Channel point redeems (needs one-time login, same as StreamTTS) ----------
+[redeems]
+enabled = false
+
+[[redeems.reward]]
+title = "Summon the swarm"
+prompt = "*the whole hive arrives*"
+action = "swarm"
+count = 8
+seconds = 15
+template = '{sfx "swarm.wav"}'
+
+# ---------- Reactions to Twitch events ----------
+[reactions.raid]
+prompt = "*lots of new friends fly in*"
+action = "swarm"
+count = 10
+seconds = 12
+template = '{sfx "swarm.wav"} {buzz}'
+
+[reactions.sub]
+prompt = "*gives the bee a gift*"
+action = "dance"
+seconds = 5
+template = '{sfx "pop.wav"} {buzz}'
+
+[reactions.resub]
+prompt = "*gives the bee another gift*"
+action = "dance"
+seconds = 5
+template = '{sfx "pop.wav"} {buzz}'
